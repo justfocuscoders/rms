@@ -363,89 +363,102 @@ class QcResults extends BaseController
      *  ✅ Test page (shows items and existing QC for a GRN)
      * ===================================================== */
     public function test($grn_id)
-    {
-        $db = \Config\Database::connect();
+{
 
-        // Get GRN main info
-        $grn_info = $db->table('grn g')
-            ->select('g.id, g.grn_no, g.created_at, s.name AS supplier_name')
-            ->join('suppliers s', 's.id = g.supplier_id', 'left')
-            ->where('g.id', $grn_id)
-            ->get()
-            ->getRowArray();
+    $this->expireStaleQcSessions();
 
-        if (!$grn_info) {
-            throw new \CodeIgniter\Exceptions\PageNotFoundException('GRN not found');
-        }
 
-        $sessionModel = new QcSessionModel();
-$userId = session('user_id');
+    $db = \Config\Database::connect();
+    $sessionModel = new QcSessionModel();
+    $userId = session('user_id');
 
-// Fetch existing QC session for this GRN
-$qcSession = $sessionModel
+    // 1️⃣ Fetch GRN
+    $grn_info = $db->table('grn g')
+        ->select('g.id, g.grn_no, g.created_at, s.name AS supplier_name')
+        ->join('suppliers s', 's.id = g.supplier_id', 'left')
+        ->where('g.id', $grn_id)
+        ->get()
+        ->getRowArray();
+
+    if (!$grn_info) {
+        throw new \CodeIgniter\Exceptions\PageNotFoundException('GRN not found');
+    }
+
+    // 2️⃣ QC Session logic
+     $qcSession = $sessionModel
     ->where('grn_id', $grn_id)
+    ->where('status !=', 'EXPIRED')
     ->first();
 
-if ($qcSession) {
 
-    // QC already completed → read-only allowed (future enhancement)
-    if ($qcSession['status'] === 'COMPLETED') {
-        // Allow view; do not block
-    }
+    if ($qcSession) {
 
-    // Someone else is testing
-    if ($qcSession['qc_user_id'] != $userId && $qcSession['status'] === 'IN_PROGRESS') {
-        return redirect()->to('/qc')
-            ->with('error', 'QC is currently in progress by another user.');
-    }
+        // Completed → view only
+        if ($qcSession['status'] === 'COMPLETED') {
+            return redirect()->to('/qc/view/'.$grn_id)
+                ->with('info', 'QC already completed for this GRN.');
+        }
 
-    // Same user resumes
-    $sessionModel->update($qcSession['id'], [
-        'last_activity_at' => date('Y-m-d H:i:s')
-    ]);
+        // Another user working
+        if ($qcSession['qc_user_id'] != $userId) {
 
-} else {
+    $qcUser = $db->table('users')
+        ->select('name')
+        ->where('id', $qcSession['qc_user_id'])
+        ->get()
+        ->getRowArray();
 
-    // First time QC start
-    $sessionModel->insert([
-        'grn_id' => $grn_id,
-        'qc_user_id' => $userId,
-        'status' => 'IN_PROGRESS',
-        'started_at' => date('Y-m-d H:i:s'),
-        'last_activity_at' => date('Y-m-d H:i:s')
+    return view('qc/locked', [
+        'grn_info' => $grn_info,
+        'qc_user'  => $qcUser['name'] ?? 'Another user',
+        'since'    => $qcSession['started_at']
     ]);
 }
 
 
-        // Get GRN item details and existing QC data
-        $grn_items = $db->table('grn_details gd')
-            ->select('gd.id AS grn_detail_id, i.name AS item_name, gd.batch_no, gd.expiry_date, gd.qty_received, qr.qc_status, qr.remarks')
-            ->join('items i', 'i.id = gd.item_id', 'left')
-            ->join('qc_results qr', 'qr.grn_detail_id = gd.id', 'left')
-            ->where('gd.grn_id', $grn_id)
-            ->orderBy('gd.id', 'ASC')
-            ->get()
-            ->getResultArray();
+        // Same user resumes
+        $sessionModel->update($qcSession['id'], [
+            'last_activity_at' => date('Y-m-d H:i:s')
+        ]);
 
-        $data = [
-            'grn_info' => $grn_info,
-            'grn_items' => $grn_items,
-        ];
+    } else {
 
-        $data['breadcrumbs'] = [
-            ['title' => 'Home', 'url' => '/dashboard'],
-            ['title' => 'Quality Control', 'url' => '/qc'],
-            ['title' => 'Test Now']
-        ];
-
-        return view('qc/test', $data);
+        // Start QC
+        $sessionModel->insert([
+            'grn_id'           => $grn_id,
+            'qc_user_id'       => $userId,
+            'status'           => 'IN_PROGRESS',
+            'started_at'       => date('Y-m-d H:i:s'),
+            'last_activity_at' => date('Y-m-d H:i:s')
+        ]);
     }
+
+    // 3️⃣ Load items
+    $grn_items = $db->table('grn_details gd')
+        ->select('gd.id AS grn_detail_id, i.name AS item_name, gd.batch_no, gd.expiry_date, gd.qty_received, qr.qc_status, qr.remarks')
+        ->join('items i', 'i.id = gd.item_id', 'left')
+        ->join('qc_results qr', 'qr.grn_detail_id = gd.id', 'left')
+        ->where('gd.grn_id', $grn_id)
+        ->orderBy('gd.id', 'ASC')
+        ->get()
+        ->getResultArray();
+
+    return view('qc/test', [
+        'grn_info' => $grn_info,
+        'grn_items'=> $grn_items,
+        'qc_owner' => true
+    ]);
+}
+
 
     /** =====================================================
      *  ✅ Update QC via AJAX (safe, builder-only)
      * ===================================================== */
     public function updateQcAjax()
 {
+
+    $this->expireStaleQcSessions();
+
     // Enforce POST
     if ($this->request->getMethod() !== 'post') {
         return $this->response
@@ -478,22 +491,40 @@ if ($qcSession) {
     $sessionModel = new \App\Models\QcSessionModel();
 
     $qcSession = $sessionModel
-        ->where('grn_id', $grn_id)
-        ->first();
+    ->where('grn_id', $grn_id)
+    ->first();
 
-    if (!$qcSession) {
-        return $this->response->setJSON([
-            'success' => false,
-            'message' => 'QC session not found. Please reopen QC.'
-        ]);
-    }
+if (!$qcSession) {
+    return $this->response->setJSON([
+        'success' => false,
+        'message' => 'QC session not found. Please reopen QC.'
+    ]);
+}
 
-    if ($qcSession['qc_user_id'] != $testerId || $qcSession['status'] !== 'IN_PROGRESS') {
-        return $this->response->setJSON([
-            'success' => false,
-            'message' => 'You are not allowed to update this QC.'
-        ]);
-    }
+// ❌ Session expired
+if ($qcSession['status'] === 'EXPIRED') {
+    return $this->response->setJSON([
+        'success' => false,
+        'message' => 'QC session expired due to inactivity. Please reopen QC.'
+    ]);
+}
+
+// ❌ Session completed
+if ($qcSession['status'] === 'COMPLETED') {
+    return $this->response->setJSON([
+        'success' => false,
+        'message' => 'QC already completed. Editing is not allowed.'
+    ]);
+}
+
+// ❌ Ownership violation
+if ((int)$qcSession['qc_user_id'] !== (int)$testerId) {
+    return $this->response->setJSON([
+        'success' => false,
+        'message' => 'You are not authorized to update this QC.'
+    ]);
+}
+
 
     /* =====================================================
        ✅ STEP 2: SAVE ITEM-LEVEL QC (your existing logic)
@@ -620,4 +651,59 @@ if ($qcSession) {
 
         return view('qc/form', $data);
     }
+
+    private function expireStaleQcSessions()
+{
+    $db = \Config\Database::connect();
+
+    $timeoutMinutes = 30;
+
+    // Mark stale sessions as EXPIRED
+    $db->table('qc_sessions')
+        ->where('status', 'IN_PROGRESS')
+        ->where('last_activity_at <', date('Y-m-d H:i:s', strtotime("-{$timeoutMinutes} minutes")))
+        ->update([
+            'status' => 'EXPIRED'
+        ]);
+}
+
+public function qcHeartbeat()
+{
+    if (!$this->request->isAJAX()) {
+        return $this->response->setStatusCode(400);
+    }
+
+    $grn_id  = (int) $this->request->getPost('grn_id');
+    $userId  = session('user_id');
+
+    if (!$grn_id || !$userId) {
+        return $this->response->setStatusCode(400);
+    }
+
+    $sessionModel = new \App\Models\QcSessionModel();
+
+    $qcSession = $sessionModel
+        ->where('grn_id', $grn_id)
+        ->where('qc_user_id', $userId)
+        ->where('status', 'IN_PROGRESS')
+        ->first();
+
+    if (!$qcSession) {
+        return $this->response->setJSON([
+            'alive' => false,
+            'message' => 'QC session not active'
+        ]);
+    }
+
+    // ✅ Update heartbeat
+    $sessionModel->update($qcSession['id'], [
+        'last_activity_at' => date('Y-m-d H:i:s')
+    ]);
+
+    return $this->response->setJSON([
+        'alive' => true
+    ]);
+}
+
+
 }

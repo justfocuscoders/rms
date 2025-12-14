@@ -135,6 +135,7 @@ $routes->group('warehouse', ['filter' => 'authrole:admin,warehouse'], function (
     $routes->get('reject/(:num)', 'Warehouse::reject/$1');
     $routes->get('view/(:num)', 'Warehouse::view/$1');
     $routes->post('addMovement', 'Warehouse::addMovement');
+    $routes->post('warehouse/accept_ajax', 'Warehouse::accept_ajax');
 });
 
 /* ==============================================
@@ -321,6 +322,7 @@ $routes->group('qc-parameters', ['filter' => 'authrole:admin'], function ($route
     $routes->post('save/(:num)', 'QcParameters::save/$1');
     $routes->get('view/(:num)', 'QcParameters::view/$1');
     $routes->get('delete/(:num)', 'QcParameters::delete/$1');
+    $routes->post('heartbeat', 'QcResults::qcHeartbeat');
 });
 
 /* ==============================================

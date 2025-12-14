@@ -24,7 +24,7 @@
         </thead>
         <tbody>
           <?php if (!empty($verificationItems)): $i = 1; foreach ($verificationItems as $item): ?>
-            <tr data-item-id="<?= $item['id'] ?>">
+            <tr data-qc-id="<?= $item['id'] ?>">
               <td><?= $i++ ?></td>
               <td><strong><?= esc($item['grn_no']) ?></strong></td>
               <td><?= esc($item['item_name']) ?></td>
@@ -99,40 +99,49 @@ $(document).ready(function() {
   });
 
   // ✅ Accept Item Inline
-  $(document).on('click', '.accept-inline-btn', function() {
-    const row = $(this).closest('tr');
-    const itemId = row.data('item-id');
-    const location = row.find('.main-location').val();
-    const storage = row.find('.storage-location').val();
+  $(document).on('click', '.accept-inline-btn', function () {
+  const row = $(this).closest('tr');
+  const qcId = row.data('qc-id');
+  const location = row.find('.main-location').val();
+  const storage = row.find('.storage-location').val();
 
-    if (!location || !storage) {
-      alert('Please select both location and storage.');
-      return;
+  if (!location || !storage) {
+    alert('Please select both location and storage.');
+    return;
+  }
+
+  $.post('<?= base_url("/warehouse/accept_ajax") ?>', {
+    qc_id: qcId,
+    location_id: location,
+    storage_id: storage
+  }, function (resp) {
+    if (resp.success) {
+      row.fadeOut(300, () => row.remove());
+    } else {
+      alert(resp.message || 'Error accepting item.');
     }
+  }, 'json');
+});
 
-    $.post('<?= base_url("/warehouse/accept") ?>', {
-      item_id: itemId,
-      location_id: location,
-      storage_id: storage
-    }, function(resp) {
-      if (resp.status === 'success') {
-        row.fadeOut(400, function() { $(this).remove(); });
-      } else {
-        alert(resp.message || 'Error accepting item.');
-      }
-    }, 'json');
-  });
 
   // ❌ Reject Item Inline
-  $(document).on('click', '.reject-inline-btn', function() {
-    const row = $(this).closest('tr');
-    const itemId = row.data('item-id');
-    if (confirm('Reject this item?')) {
-      $.post('<?= base_url("/warehouse/reject/" ) ?>' + itemId, function(resp) {
-        row.fadeOut(400, function() { $(this).remove(); });
-      });
+  $(document).on('click', '.reject-inline-btn', function () {
+  const row = $(this).closest('tr');
+  const qcId = row.data('qc-id');
+
+  if (!confirm('Reject this item?')) return;
+
+  $.post('<?= base_url("/warehouse/reject_ajax") ?>', {
+    qc_id: qcId
+  }, function (resp) {
+    if (resp.success) {
+      row.fadeOut(300, () => row.remove());
+    } else {
+      alert(resp.message || 'Reject failed.');
     }
-  });
+  }, 'json');
+});
+
 });
 </script>
 

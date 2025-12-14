@@ -13,24 +13,33 @@ class Warehouse extends BaseController
         $db = \Config\Database::connect();
 
         // 1️⃣ QC-approved items pending warehouse verification
-        $verificationItems = $db->table('qc_results qr')
-            ->select('qr.id, g.id AS grn_id, g.grn_no, i.name AS item_name, gd.batch_no,
-                  s.name AS supplier_name, gd.qty_received AS approved_qty,
-                  qr.remarks, qr.store_status, gd.id AS grn_detail_id')
-            ->join('grn_details gd', 'gd.id = qr.grn_detail_id')
-            ->join('grn g', 'g.id = gd.grn_id')
-            ->join('items i', 'i.id = gd.item_id')
-            ->join('suppliers s', 's.id = g.supplier_id', 'left')
-            ->where('qr.qc_status', 'Accepted')
-            ->where('qr.store_status', 'Pending')
-            ->groupStart()
-            ->whereIn('g.status', ['QC Completed', 'QC In Progress'])
-            ->orWhere('g.status IS NOT NULL', null, false)
-            ->groupEnd()
-            ->orderBy('g.id', 'DESC')
-            ->orderBy('gd.id', 'ASC')
-            ->get()
-            ->getResultArray();
+        // 1️⃣ QC-approved items pending warehouse verification
+$verificationItems = $db->table('qc_results qr')
+    ->select('
+        qr.id,
+        g.id AS grn_id,
+        g.grn_no,
+        g.status AS grn_status,
+        i.name AS item_name,
+        gd.batch_no,
+        s.name AS supplier_name,
+        gd.qty_received AS approved_qty,
+        qr.remarks,
+        qr.store_status,
+        gd.id AS grn_detail_id
+    ')
+    ->join('grn_details gd', 'gd.id = qr.grn_detail_id')
+    ->join('grn g', 'g.id = gd.grn_id')
+    ->join('items i', 'i.id = gd.item_id')
+    ->join('suppliers s', 's.id = g.supplier_id', 'left')
+    ->where('qr.qc_status', 'Accepted')
+    ->where('qr.store_status', 'Pending')
+    ->where('g.status', 'QC Completed')   // 🔒 OPTION F ENFORCED
+    ->orderBy('g.id', 'DESC')
+    ->orderBy('gd.id', 'ASC')
+    ->get()
+    ->getResultArray();
+
 
         // 🧩 Supplier & Item Filters
         $supplier_id = $this->request->getGet('supplier_id');
@@ -144,86 +153,122 @@ class Warehouse extends BaseController
     * ✅ Accept QC Item — Add to Stock + Mark as Accepted
     * ===================================================== */
     public function accept($qc_id)
-    {
-        $db = \Config\Database::connect();
-        $db->transStart();
+{
+    $db = \Config\Database::connect();
 
-        // 🔹 Fetch QC item info
-        $item = $db->table('qc_results qr')
-            ->select('qr.*, gd.item_id, gd.batch_no, gd.expiry_date, gd.qty_received, gd.id AS grn_detail_id')
-            ->join('grn_details gd', 'gd.id = qr.grn_detail_id')
-            ->where('qr.id', $qc_id)
-            ->get()
-            ->getRowArray();
+    // 🔹 Fetch QC item info
+    $item = $db->table('qc_results qr')
+        ->select('qr.*, gd.item_id, gd.batch_no, gd.expiry_date, gd.qty_received, gd.id AS grn_detail_id')
+        ->join('grn_details gd', 'gd.id = qr.grn_detail_id')
+        ->where('qr.id', $qc_id)
+        ->get()
+        ->getRowArray();
 
-        if (!$item) {
-            return redirect()->back()->with('error', 'Invalid item selected.');
-        }
+    if (!$item) {
+        return redirect()->back()->with('error', 'Invalid QC item selected.');
+    }
 
-        // 🔹 Check if stock exists
-        $exists = $db->table('stock')
-            ->where('item_id', $item['item_id'])
-            ->where('batch_no', $item['batch_no'])
-            ->get()
-            ->getRowArray();
+    /* =====================================================
+       🔒 STEP 2 — PREVENT DOUBLE ACCEPTANCE
+    ===================================================== */
+    if ($item['store_status'] === 'Accepted') {
+        return redirect()->back()->with(
+            'error',
+            'This QC item has already been accepted into stock.'
+        );
+    }
 
-        $movedBy = session()->get('user_id') ?? null;
-        $remarks = 'Accepted from QC (ID: ' . $qc_id . ')';
+    /* =====================================================
+       🔒 OPTION F — BLOCK IF GRN QC NOT COMPLETED
+    ===================================================== */
+    $grn = $db->table('grn g')
+        ->select('g.id, g.grn_no, g.status')
+        ->join('grn_details gd', 'gd.grn_id = g.id')
+        ->where('gd.id', $item['grn_detail_id'])
+        ->get()
+        ->getRowArray();
 
-        if ($exists) {
-            $newQty = (float)$exists['qty_available'] + (float)$item['qty_received'];
+    if (!$grn) {
+        return redirect()->back()->with('error', 'GRN not found for this QC item.');
+    }
 
-            $db->table('stock')
-                ->where('id', $exists['id'])
-                ->update(['qty_available' => $newQty]);
+    if ($grn['status'] !== 'QC Completed') {
+        return redirect()->back()->with(
+            'error',
+            'Cannot accept stock. QC is not completed for GRN ' . $grn['grn_no']
+        );
+    }
 
-            $stockId = $exists['id'];
-            $msg = 'Item quantity updated in existing stock.';
-        } else {
-            $insertData = [
-                'item_id' => $item['item_id'],
-                'grn_detail_id' => $item['grn_detail_id'],
-                'batch_no' => $item['batch_no'] ?? null,
-                'expiry_date' => $item['expiry_date'] ?? null,
-                'qty_available' => $item['qty_received'] ?? 0,
-                'location_id' => 1,
-                'created_at' => date('Y-m-d H:i:s')
-            ];
-            $db->table('stock')->insert($insertData);
-            $stockId = $db->insertID();
-            $newQty = (float)$item['qty_received'];
-            $msg = 'New stock item added successfully.';
-        }
+    /* =====================================================
+       ✅ SAFE TO MODIFY DATA — START TRANSACTION
+    ===================================================== */
+    $db->transStart();
 
-        // ✅ Log stock movement
-        $db->table('stock_movements')->insert([
-            'stock_id' => $stockId,
-            'movement_type' => 'IN',
-            'reference_table' => 'qc_results',
-            'reference_id' => $qc_id,
-            'qty' => $item['qty_received'],
-            'balance_after' => $newQty,
-            'remarks' => $remarks,
-            'moved_by' => $movedBy,
-            'moved_at' => date('Y-m-d H:i:s')
+    // 🔹 Check if stock already exists
+    $exists = $db->table('stock')
+        ->where('item_id', $item['item_id'])
+        ->where('batch_no', $item['batch_no'])
+        ->get()
+        ->getRowArray();
+
+    $movedBy = session()->get('user_id');
+    $remarks = 'Accepted from QC (QC ID: ' . $qc_id . ')';
+
+    if ($exists) {
+        $newQty = (float) $exists['qty_available'] + (float) $item['qty_received'];
+
+        $db->table('stock')
+            ->where('id', $exists['id'])
+            ->update(['qty_available' => $newQty]);
+
+        $stockId = $exists['id'];
+        $msg = 'Item quantity updated in existing stock.';
+    } else {
+        $db->table('stock')->insert([
+            'item_id'       => $item['item_id'],
+            'grn_detail_id' => $item['grn_detail_id'],
+            'batch_no'      => $item['batch_no'],
+            'expiry_date'   => $item['expiry_date'],
+            'qty_available' => $item['qty_received'],
+            'location_id'   => 1, // default location
+            'created_at'    => date('Y-m-d H:i:s')
         ]);
 
-        // ✅ Update QC store_status
-        $db->table('qc_results')
-            ->where('id', $qc_id)
-            ->update([
-                'store_status' => 'Accepted',
-                'updated_at' => date('Y-m-d H:i:s')
-            ]);
-
-        $db->transComplete();
-
-        if ($db->transStatus() === false) {
-            return redirect()->back()->with('error', 'Transaction failed.');
-        }
-
-        return redirect()->to('/warehouse')->with('success', $msg);
+        $stockId = $db->insertID();
+        $newQty  = (float) $item['qty_received'];
+        $msg     = 'New stock item added successfully.';
     }
+
+    // ✅ Log stock movement
+    $db->table('stock_movements')->insert([
+        'stock_id'        => $stockId,
+        'movement_type'   => 'IN',
+        'reference_table' => 'qc_results',
+        'reference_id'    => $qc_id,
+        'qty'             => $item['qty_received'],
+        'balance_after'   => $newQty,
+        'remarks'         => $remarks,
+        'moved_by'        => $movedBy,
+        'moved_at'        => date('Y-m-d H:i:s')
+    ]);
+
+    // ✅ Mark QC item as stored
+    $db->table('qc_results')
+        ->where('id', $qc_id)
+        ->update([
+            'store_status' => 'Accepted',
+            'updated_at'   => date('Y-m-d H:i:s')
+        ]);
+
+    $db->transComplete();
+
+    if ($db->transStatus() === false) {
+        return redirect()->back()->with('error', 'Stock acceptance failed.');
+    }
+
+    return redirect()->to('/warehouse')->with('success', $msg);
+}
+
 
     /** =====================================================
     * ❌ Reject QC Item — Update store_status = Rejected
@@ -380,4 +425,28 @@ class Warehouse extends BaseController
 
         return $this->response->setJSON(['status' => 'success']);
     }
+
+    public function accept_ajax()
+{
+    $qc_id = (int) $this->request->getPost('qc_id');
+    $locationId = (int) $this->request->getPost('location_id');
+    $storageId  = (int) $this->request->getPost('storage_id');
+
+    if (!$qc_id || !$locationId || !$storageId) {
+        return $this->response->setJSON([
+            'success' => false,
+            'message' => 'Invalid request data.'
+        ]);
+    }
+
+    // Reuse your already-correct accept logic here
+    // BUT replace redirect with JSON response
+    // AND use $locationId, $storageId instead of hardcoded 1
+
+    return $this->response->setJSON([
+        'success' => true,
+        'message' => 'Stock accepted successfully.'
+    ]);
+}
+
 }

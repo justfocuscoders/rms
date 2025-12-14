@@ -173,8 +173,23 @@
         }, 800);
 
       } else {
-        showToast('Error', data.message || 'Failed to save QC data', 'danger');
-      }
+    showToast('Error', data.message || 'Failed to save QC data', 'danger');
+
+    // 🔒 Auto-redirect if session expired or access lost
+    if (
+        data.message &&
+        (
+            data.message.includes('expired') ||
+            data.message.includes('not authorized') ||
+            data.message.includes('already completed')
+        )
+    ) {
+        setTimeout(() => {
+            window.location.href = "<?= base_url('/qc') ?>";
+        }, 2000);
+    }
+}
+
 
     } catch (err) {
       console.error(err);
@@ -224,6 +239,41 @@
     toast.addEventListener('hidden.bs.toast', () => toast.remove());
   }
 </script>
+<script>
+(function startQcHeartbeat() {
+
+  const grnId = <?= (int) $grn_info['id'] ?>;
+
+  async function sendHeartbeat() {
+    try {
+      const res = await fetch("<?= base_url('/qc/heartbeat') ?>", {
+        method: "POST",
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+          "Content-Type": "application/x-www-form-urlencoded"
+        },
+        body: "grn_id=" + grnId
+      });
+
+      const data = await res.json();
+
+      // ❌ Session lost → kick user out
+      if (!data.alive) {
+        alert("QC session expired or taken over. You will be redirected.");
+        window.location.href = "<?= base_url('/qc') ?>";
+      }
+
+    } catch (e) {
+      console.warn("QC heartbeat failed", e);
+    }
+  }
+
+  // 🔁 Every 30 seconds (safe & light)
+  setInterval(sendHeartbeat, 30000);
+
+})();
+</script>
+
 
 
 <?= $this->include('layout/footer') ?>
