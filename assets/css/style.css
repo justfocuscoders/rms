@@ -1,0 +1,120 @@
+/* Wrapper */
+.wrapper {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+  background: #f8f9fa;
+}
+
+/* Sidebar */
+.sidebar-wrapper {
+  width: 250px;
+  background: #1e1e2d;
+  color: #fff;
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  transition: all 0.3s ease;
+  z-index: 1000;
+}
+.sidebar-wrapper.collapsed { width: 70px; }
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 15px;
+  border-bottom: 1px solid rgba(255,255,255,.1);
+}
+.sidebar-header .logo-icon {
+  width: 35px;
+  margin-right: 10px;
+}
+.sidebar-header .logo-text {
+  color: #fff;
+  font-weight: bold;
+}
+
+.metismenu a {
+  color: #cfd8dc;
+  display: flex;
+  align-items: center;
+  padding: 10px 20px;
+  transition: 0.2s;
+}
+.metismenu a:hover {
+  background: rgba(255,255,255,0.1);
+  color: #fff;
+}
+
+/* Page Wrapper */
+.page-wrapper {
+  margin-left: 250px;
+  flex-grow: 1;
+  transition: all 0.3s ease;
+}
+.page-wrapper.expanded { margin-left: 70px; }
+
+/* Header */
+.topbar {
+  position: fixed;
+  top: 0;
+  left: 250px;
+  right: 0;
+  height: 60px;
+  background: #fff;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  align-items: center;
+  padding: 0 20px;
+  transition: all 0.3s ease;
+  z-index: 1001;
+}
+.topbar.expanded { left: 70px; }
+.topbar .user-box img {
+  width: 35px;
+  border-radius: 50%;
+}
+
+/* Content */
+.page-content {
+  margin-top: 70px;
+  padding: 20px;
+}
+
+/* Footer */
+.page-footer {
+  background: #fff;
+  border-top: 1px solid #ddd;
+  text-align: center;
+  padding: 10px;
+  margin-top: 20px;
+}
+
+/* Sidebar default */
+.sidebar {
+  width: 250px;
+  background: #1e1e2d;
+  color: #fff;
+  height: 100vh;
+  position: fixed;
+  transition: all 0.3s ease;
+  overflow-y: auto;
+}
+/* Collapsed state */
+.sidebar.collapsed {
+  width: 70px;
+}
+
+.sidebar.collapsed .logo-text,
+.sidebar.collapsed .menu-title {
+  display: none;
+}
+
+/* Expand on hover */
+.sidebar.collapsed:hover {
+  width: 250px;
+}
+.sidebar.collapsed:hover .logo-text,
+.sidebar.collapsed:hover .menu-title {
+  display: inline-block;
+}
